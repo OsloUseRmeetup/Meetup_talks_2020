@@ -1,0 +1,709 @@
+---
+title: "R keras"
+author: ''
+date: "09/01/2020"
+output:
+  ioslides_presentation: default
+  slidy_presentation: default
+  beamer_presentation: default
+  smaller: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## Keras {.smaller}
+
+Keras is an open-source neural network library written in Python and capable of running on top of TensorFlow, Microsoft Cognitive Toolkit (CNTK), or Theano.
+
+Released in 2015 in python
+
+R package "keras" released 2017
+
+Not to be confused with "kerasR" which has a similar purpose
+
+
+## Or Medieval English Grain Yields {.smaller}
+
+
+
+
+```{r, out.width = "500px"}
+
+knitr::include_graphics("main.jpg", )
+
+```
+
+The Medieval Crop Yields Database ( http://www.cropyields.ac.uk/) "is the single largest and most precise body of data on pre-modern grain harvests currently available internationally. "
+
+There is some gaps in the database, which I have imputed. 
+
+## Medieval English Grain Yields {.smaller}
+
+
+The data lists by county and manor house (I've just taken one county) and year what  the gross yeild per seed ratio is - basically a measure of how much seed you get out compared to what you put in. This is recorded for oats, wheat and barley (Theres other plants, but these were the best filled out).
+
+Anything missing has been median imputed for that manor. 
+
+I've also taken the latitude and longitude of the manor houses. 
+
+
+
+## Lets start super simple -Regression {.smaller}
+
+For the moment (do not try this at home!} lets ignore that there's a time aspect here. 
+
+
+```{r echo=FALSE, results='hide',message=FALSE}
+
+library(tidyverse)
+library(tidyr)
+library(naniar)
+library(tidyimpute)
+library(keras)
+
+hampshire<- read_csv(paste(getwd(), "/hampshire.csv", sep=""))
+
+latitudes <- read_csv(paste(getwd(), "/latitude.csv", sep=""))
+
+hampshire <- hampshire %>% 
+  inner_join(latitudes, by=c("manor_name"="place"))
+
+hampshire <- hampshire %>% 
+  mutate(manor_name=as.numeric(as.factor(manor_name))) %>% 
+  group_by(manor_name) %>% 
+  mutate_all(~ifelse(is.na(.), median(., na.rm = TRUE), .)) %>% 
+  ungroup %>% 
+  mutate_all(~ifelse(is.na(.), median(., na.rm = TRUE), .)) %>% 
+  select(manor_name, latitude, longitude, wheat_gross_yield_per_seed_ratio, barley_gross_yield_per_seed_ratio, oats_gross_yield_per_seed_ratio)
+
+
+
+```
+
+```{r, echo = T}
+glimpse(hampshire)
+```
+
+## Quick data prep {.smaller}
+
+We need to define training and test sets and make sure our data is in the right format. 
+
+We need to feed the data in as a matrix
+
+```{r, echo=TRUE, results='hide'}
+
+require(caTools)
+set.seed(101) 
+sample = sample.split(hampshire$wheat_gross_yield_per_seed_ratio, SplitRatio = .75)
+train = subset(hampshire, sample == TRUE)
+test  = subset(hampshire, sample == FALSE)
+
+train_x<- train %>% 
+  select(-oats_gross_yield_per_seed_ratio)
+
+train_x<- as.matrix(train_x)
+
+train_y <- train %>% 
+  select(oats_gross_yield_per_seed_ratio)
+
+train_y <- as.matrix(train_y)
+
+test_x<- test %>% 
+  select(-oats_gross_yield_per_seed_ratio)
+
+test_x<- as.matrix(test_x)
+
+test_y <- test %>% 
+  select(oats_gross_yield_per_seed_ratio)
+
+test_y <- as.matrix(test_y)
+
+```
+
+## The architecture
+
+keras model_sequential() stacks layers on top of each other
+
+Each layer has to be given information on the type of layer (dense, pooling, concolutional...), the size (number of neurons), and the activation (ReLu, sigmoid...)
+
+One then needs to compile the model by telling it the loss function (how you measure how close you are to correct), the optimizer (how the weights are updated), and any metrics you want to know (accuracy, kappa, mse...)
+
+After that you feed the data to the model, 
+
+
+## The architecture
+
+```{r cars, echo = T, results = 'hide'}
+library(keras)
+
+ model <- keras_model_sequential() %>%
+    layer_dense(units = 64, activation = "relu",
+                input_shape = dim(train_x)[2]) %>%
+    layer_dense(units = 64, activation = "relu") %>%
+    layer_dense(units = 1)
+  
+  model %>% compile(
+    loss = "mse",
+    optimizer = optimizer_adam(),
+    metrics = list("mean_absolute_error")
+  )
+```
+
+## The model {.smaller}
+<font size="4">
+keras_model_sequential() sets out an archetecture of layers of various types stacked on top of each other while the compiler has information about loss functions and optimizers
+
+
+```{r, echo = T}
+print(model)
+
+```
+</font> 
+
+## Train model 
+
+```{r, echo = T, results = 'hide'}
+model %>% fit(train_x, train_y, epochs = 20, verbose=1)
+
+```
+
+```{r, echo=TRUE}
+scores = model %>% evaluate(test_x,test_y, verbose = 0)
+scores
+```
+
+
+## Layers {.smaller}
+
+
+Layers come in many of the standard types you have heard of - there are dense, convolutional, recurrent, embedding etc options as stadard
+
+If you want a layer to do some non-standard function you can write your own using layer_lambda()
+
+A simple implementation looks like this: 
+  
+
+```{r, echo= TRUE}
+
+library(keras)
+square_function <- function(params){
+  a_square <- params^2
+}
+
+model <- keras_model_sequential() %>% 
+  layer_dense(units = 64, activation = "relu",
+                input_shape = dim(train_x)[2]) %>% 
+  layer_lambda(square_function) %>% 
+  layer_dense(units = 1)
+
+```
+You can also write a custom layer!
+
+## Normalization {.smaller}
+
+Its usually better to normalize your data (often mean=0, standard deviation=1, but other choices are good too)
+
+This can be especially important if your input variables are of quite different scales
+
+You should only calculate this on your training data! then you can scale your validation data in the same manner
+
+
+## Overfitting {.smaller}
+
+Overfitting is when your model is improving on the training set at the expense of accuracy in the test set.
+
+You can think of this as it has memorized the training set rather than learnt pattern. 
+
+This is obviously undesirable, and is a frequent problem with big networks
+
+There are numerous ways to handle overfitting, two common are regularization and dropout
+
+## Regularization {.smaller}
+
+This adds a term to the loss function so that the loss increases as the weights get too big
+
+- L1 regularization: the cost added is proportional to the absolute value of the weight coefficients
+
+- L2 regularization/weight decay: the cost is proportional to the square of the value of the weight coefficients 
+
+One can always use a combination of the two. L1 regularization tends to set many of the weights to zero, while L2 shrinks them
+
+In keras just add kernel_regularizer = regularizer_l2(0.001)
+
+
+## Dropout {.smaller}
+
+```{r, out.width = "300px"}
+
+knitr::include_graphics("dropout.png", )
+
+```
+
+Just add layer_dropout(rate = 0.2)
+
+
+
+## Overfitting {.smaller}
+
+Its easy to add these in R
+
+```{r, echo=TRUE}
+
+model <- keras_model_sequential() %>%
+  layer_dense(units = 64, activation = "relu",
+              input_shape = dim(train_x)[2]) %>%
+  layer_dense(units = 32, kernel_regularizer = regularizer_l2(0.001),
+              activation = "relu") %>%
+  layer_dropout(rate = 0.5) %>% 
+  layer_dense(units = 1)
+
+```
+
+## NaNs ?!? {.smaller}
+
+Losses should be finite and positive. If its negative, you've probably picked the wrong loss function
+
+If its Inf or NaN that can be your model spiralling out of control. If so some things you can do:
+
+- check your data is numeric and free of NAs Infs etc (this should be NaN from first epoch in this case)
+
+- CHECK YOUR DATA IS NUMERIC
+
+Otherwise it is probably an exploding gradient problem
+
+## NaNs ?!? {.smaller}
+
+There is problems with both vanishhing and exploding gradients in neural networks. As you backpropogate the gradients used (which are used to update your parameters) become unstable, and can vanish (learning goes super slowly) or explode (things go horribly wrong). 
+
+- adam optimizer (varies learning rate) and/or reduce learning rate
+
+- add regularizer
+
+- add gradient clipping (clips any gradients beyond a certain size)
+
+- leaky relu
+
+## saving, loading
+
+Once we have a decent model, we often want to save it for future use. Usually saving as hdf5 works fine
+
+If you have a custom layer you may need more care however (!)
+
+It can be great to save the model at various points as you train (to, e.g. grab the point before it overfits, or to protect against interruptions)
+
+Can do this with callback_model_checkpoint()
+
+
+## getting and assigning weights
+
+Lets train a tiny model
+
+```{r, echo=TRUE}
+
+model <- keras_model_sequential() %>%
+  layer_dense(units = 1, activation = "relu",
+              input_shape = dim(train_x)[2])
+model %>% compile(
+  loss = "mse",
+  optimizer = optimizer_adam(),
+  metrics = list("mean_absolute_error"))
+model %>% fit(train_x, train_y, epochs = 10, verbose=0)
+weights <- get_weights(model)
+weights
+
+```
+
+## getting and assigning weights
+
+Say we know something about what our weights should look like (testing, initializing...)
+
+```{r, echo=TRUE}
+weights[[1]][ , 1]
+weights[[1]][ , 1] <- c(0, 0, 0, 1, 1)
+set_weights(model, weights)
+get_weights(model)
+```
+Be careful with subsetting!  (Advanced R, Hadley Wickham)
+
+## initializing weights
+
+90% of the time its probably best to stick to the default keras settings, but if you want to play with a different initialization 
+
+```{r, echo = T}
+model <- keras_model_sequential() %>%
+  layer_dense(units = 1, activation = "relu",
+              input_shape = dim(train_x)[2],
+              kernel_initializer = 'orthogonal',
+              bias_initializer = initializer_constant(2.0)
+              )
+
+get_weights(model)[[2]]
+
+```
+## RNNs
+
+```{r, out.width = "500px"}
+
+knitr::include_graphics("rnn.png", )
+
+```
+
+```{r, out.width = "500px"}
+
+knitr::include_graphics("rnn_types.jpeg", )
+
+```
+
+Each rectangle is a vector and arrows represent functions (e.g. matrix multiply)
+
+
+## Generators
+
+A generator is a way of organizing the data in a good way and passing it to your model in correctly-sized peices
+
+This is useful for instance when you have too much data for your memory, as often the case in image classification
+
+There are some built in generators in keras for this such as flow_images_from_directory()
+
+These are also useful in time series for handling batches of data correctly ordered and making successive predictions
+
+Le's write our own generator!
+
+## <<- 
+
+<font size="4">
+The regular assignment arrow, <-, always creates a variable in the current environment. The deep assignment arrow, <<-, never creates a variable in the current environment, but instead modifies an existing variable found by walking up the parent environments.
+
+```{r, echo=TRUE}
+x <- 0
+f <- function() {
+  x <<- x+1
+}
+f()
+x
+f()
+x
+```
+</font>
+
+## Generators
+
+Lets say we want to use the last 10 years to predict the next year
+
+To train the model we want to successively pluck out data in 11 - year groups 10 inputs (our lookback) and 1 output. 
+```{r, include = FALSE}
+hampshire<- read_csv(paste(getwd(), "/hampshire.csv", sep=""))
+
+hambledon <- hampshire %>%
+  filter(manor_name =="Hambledon")
+
+naniar::miss_var_summary(hambledon)
+
+hambledon <- hambledon %>% 
+  select(end_year:oats_gross_yield_per_seed_ratio) 
+
+
+end_years <- as.data.frame(seq(1211,1347))
+
+names(end_years) <- "end_year"
+
+hambledon <- end_years %>% 
+  left_join(hambledon, by="end_year")
+
+hambledon <- hambledon %>% 
+  mutate_all(~ifelse(is.na(.), median(., na.rm = TRUE), .))
+```
+
+
+
+```{r echo = T, results = 'hide'}
+data <- hambledon
+target_column <-5
+max_index <- 100
+lookback <- 5
+i <<- lookback +1
+batch_size <- 1
+rows <- c(i:min(i+batch_size-1, max_index))
+rows
+i <<- i + length(rows)
+i
+     
+      
+```
+## Generators
+
+```{r, echo = T, results = 'hide'}
+data <- hambledon
+target_column <-4
+
+samples <- array(0, dim = c(length(rows), 
+                                lookback,
+                                dim(data)[[-1]]))
+targets <- array(0, dim = c(length(rows)))
+
+    
+    for (j in 1:length(rows)) {
+      indices <- seq(rows[[j]] - lookback, rows[[j]] - 1, 
+                     length.out = dim(samples)[[2]])
+      samples[j,,] <- data[indices,]
+      targets[[j]] <- data[rows[[j]], target_column]}
+samples
+targets
+```
+
+
+## Generators
+
+Now we just wrap that code in a function 
+
+```{r echo= TRUE}
+
+generator <- function(data, lookback, max_index, batch_size = 128) {
+  i <- lookback +1
+  function() {
+      if (i + batch_size >= max_index)
+        i <<- lookback +1
+      rows <- c(i:min(i+batch_size-1, max_index))
+      i <<- i + length(rows)
+    samples <- array(0, dim = c(length(rows), lookback, dim(data)[[-1]]))
+    targets <- array(0, dim = c(length(rows)))
+    for (j in 1:length(rows)) {
+      indices <- seq(rows[[j]] - lookback, rows[[j]] - 1, 
+                     length.out = dim(samples)[[2]])
+      samples[j,,] <- data[indices,]
+      targets[[j]] <- data[rows[[j]], target_column]
+    }            
+    list(samples, targets)
+  }
+}
+
+      
+```
+
+## Generators
+and write generator for our train, validation and test sets
+
+```{r, echo = TRUE}
+train_end <- 100
+train_gen <- generator(
+  hambledon,
+  lookback = lookback,
+  max_index = train_end,
+  batch_size = batch_size
+)
+train_gen()
+```
+
+## RNNs
+
+recurrent neural networks can be implemented with layer_simple_rnn(), layer_gru(), layer_lstm()
+```{r}
+model <- keras_model_sequential() %>% 
+  layer_gru(units = 32, input_shape = list(NULL, dim(hambledon)[[-1]])) %>% 
+  layer_dense(units = 1)
+model %>% compile(
+  optimizer = optimizer_rmsprop(),
+  loss = "mae"
+)
+```
+Looks similar to last time!
+
+
+## RNNs
+
+```{r, include=FALSE}
+train_end <- 80 
+val_start <- train_end + 1
+val_end <- 100 
+test_start <- val_end + 1
+test_end <- nrow(data)
+
+train_data <- data[1:train_end,]
+
+std <- c(apply(train_data, 2, sd))
+mean <-c(apply(train_data, 2, mean))
+data <- scale(data, center = mean, scale = std)
+
+target_column <- 4
+
+#NB! The data MUST be a matrix, not a dataframe!!
+#right now this is done by scale()
+generator <- function(data, lookback, delay, min_index, max_index,
+                      shuffle = FALSE, batch_size = 128, step = 6) {
+  if (is.null(max_index))
+    max_index <- nrow(data) - delay - 1
+  i <- min_index + lookback
+  function() {
+    if (shuffle) {
+      rows <- sample(c((min_index+lookback):max_index), size = batch_size)
+    } else {
+      if (i + batch_size >= max_index)
+        i <<- min_index + lookback
+      rows <- c(i:min(i+batch_size-1, max_index))
+      i <<- i + length(rows)
+    }
+    
+    samples <- array(0, dim = c(length(rows), 
+                                lookback / step,
+                                dim(data)[[-1]]))
+    targets <- array(0, dim = c(length(rows)))
+    
+    for (j in 1:length(rows)) {
+      indices <- seq(rows[[j]] - lookback, rows[[j]] - 1, 
+                     length.out = dim(samples)[[2]])
+      samples[j,,] <- data[indices,]
+      targets[[j]] <- data[rows[[j]] + delay, target_column]
+    }            
+    
+    list(samples, targets)
+  }
+}
+lookback <- 5 
+step <- 1 
+delay <- 1 
+batch_size <- 1 
+
+train_gen <- generator(
+  data,
+  lookback = lookback,
+  delay = delay,
+  min_index = 1,
+  max_index = train_end,
+  shuffle = TRUE,
+  step = step, 
+  batch_size = batch_size
+)
+```
+
+
+```{r, echo = T, results = 'hide'}
+#
+model <- keras_model_sequential() %>% 
+  layer_gru(units = 32, input_shape = list(NULL, dim(hambledon)[[-1]])) %>% 
+  layer_dense(units = 1)
+model %>% compile(
+  optimizer = optimizer_rmsprop(),
+  loss = "mae"
+)
+
+```
+
+
+Because we're using a generator we have a slightly different set up with the training of the model
+
+fit_generator() tells the R that it is using one of these in-built or custom generators
+
+```{r, echo=TRUE, results = 'hide'}
+model %>% fit_generator(
+  train_gen,
+  steps_per_epoch = 10,
+  epochs = 20
+)
+```
+We need the steps per epoch as a control to stop the generator running forever!
+
+## Validation
+
+To include a validation set, we write a validation set generator
+
+```{r, echo = T, results = 'hide'}
+val_gen = generator(
+  data,
+  lookback = lookback,
+  delay = delay,
+  min_index =train_end + 1,
+  max_index = val_end,
+  step = step,
+  batch_size = batch_size
+)
+
+val_steps <- (val_end - (train_end+1) - lookback) / batch_size
+```
+
+## Validation
+
+and include it in the fit_generator instructions
+
+```{r, echo = T, results = 'hide'}
+
+history <- model %>% fit_generator(
+  train_gen,
+  steps_per_epoch = 4,
+  epochs = 10,
+  validation_data = val_gen,
+  validation_steps = val_steps
+)
+
+```
+
+
+## Recurrent dropout
+
+With RNNs we have to be careful about using dropout
+
+```{r, out.width = "500px"}
+
+knitr::include_graphics("recurrent_dropout.png", )
+
+```
+There are two 
+
+
+## Recurrent dropout
+
+This is easy to do in r, we just add
+
+```{r, echo=T, results='hide'}
+
+layer_lstm(units = 32, 
+             dropout = 0.2, 
+             recurrent_dropout = 0.5,
+             return_sequences = TRUE#,
+             )
+
+
+```
+
+## A note on CNNs and image capabilities
+
+I find a lot of the deep learning bits either talk about NLP and/or images, as these are the areas we've made most impressive progress in.
+
+I have not worked with either of these in keras, but it seems there are some nice tools available
+
+standard preprocessing included such as scaling, rotating, shearing, zooming...  which allows easy data augmentation
+
+standard layers include covolutional layers and pooling layers 
+
+Keras also allows you to use a pretrained model, for instance several standard imagenet networks. 
+
+
+
+## Functional API
+
+We have only worked so far with model_sequential(). This is often enough - its designed to be simple do do many of the most common tasks. 
+
+Sometimes you may have to use more complicated models that combine layers in different ways
+
+You can still do this, but it requires a bit more wrangling!
+
+## Functional API
+
+```{r, out.width = "500px"}
+
+knitr::include_graphics("api_graph.png", )
+
+```
+
+
+## References
+
+https://keras.rstudio.com/ tutorials, 
+
+The R keras bible: "Deep Learning with R" by François Chollet (Keras author) and J. J. Allaire (R interface writer)
+
+and accompaning code: https://github.com/jjallaire/deep-learning-with-r-notebooks
+
+Subsetting, closures and <<- : "Advanced R" by Hadley Wickham https://adv-r.hadley.nz/
+
